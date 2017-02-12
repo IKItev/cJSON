@@ -5,6 +5,8 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <math.h>
 #include "leptjson.h"
 
 #define EXPECT(con, ch) \
@@ -12,6 +14,9 @@
         assert((*con->json) == (ch)); \
         con->json++; \
         } while(0)
+
+#define ISDIGIT(ch)         ((ch) >= '0' && (ch) <= '9')
+#define ISDIGIT1TO9(ch)     ((ch) >= '1' && (ch) <= '9')
 
 
 typedef struct LEPT_CONTEST {
@@ -46,7 +51,7 @@ double lept_get_number(const lept_value* val)
 int lept_parse(lept_value* val, const char* json)
 {
     lept_context con;
-    int ret;
+    int ret = 0;
     assert(NULL != val);
     con.json = json;
     val->type = LEPT_NULL;
@@ -91,16 +96,72 @@ int lept_parse_literal(lept_context* con, lept_value* val, const char* literal, 
 
 int lept_parse_number(lept_context* con, lept_value* val)
 {
-    /*  使用 stdlib 函数 strtod()，把字符串转换成 double 的数值
+    /*  使用 stdlib.h 函数 strtod()，把字符串转换成 double 的数值
         double strtod(const char *str, char **endptr)
         如果 endptr 不为空，则指向转换中最后一个字符后的字符 */
-    char* endptr;
-    /*  把文本中的数值存到 val->num 中 */
-    val->num = strtod(con->json, &endptr);
-    /*  如果没有正确的数值转换，则指针位置没有发生变化 */
-    if (endptr == con->json)
+    /*  使用 errno.h 定义的宏 erron、ERANGE，测试返回值得知数值是否过大 
+        C 库宏 ERANGE 表示一个范围错误
+        它在输入参数超出数学函数定义的范围时发生，errno 被设置为 ERANGE */
+    const char* p;
+    p = con->json;
+    errno = 0;
+    /*  如果文本中的数值是无效数值，则不需要转换 */
+    /*  number = [ "-" ] int [ frac ] [ exp ] */
+    /*  符号部分 */
+    if('+' == *p)
         return LEPT_PARSE_INVALID_VALUE;
-    con->json = endptr;
+    if('-' == *p) p++;
+    /*  整数部分 int = "0" / digit1-9 *digit */
+    /*  0 开头只能有且只有 0 */
+    if('0' == *p) 
+    {
+        p++;
+        if(*p && '.' != *p)
+            return LEPT_PARSE_ROOT_NOT_SINGULAR;          
+    }
+    else    /*  1-9 开头 */
+    {   
+        if(ISDIGIT1TO9(*p))
+            for(p++; ISDIGIT(*p); p++);
+        else
+            return LEPT_PARSE_INVALID_VALUE; 
+    }
+    /*  小数部分 frac = "." 1*digit */
+    if('.' == *p)
+    {
+        p++;
+        if(ISDIGIT(*p))
+            for(p++; ISDIGIT(*p); p++);
+        else
+            return LEPT_PARSE_INVALID_VALUE; 
+    }
+    /*  指数部分 exp = ("e" / "E") ["-" / "+"] 1*digit */
+    if('e' == *p || 'E' == *p)
+    {
+        p++;
+        if('+' == *p || '-' == *p) p++;
+        if(ISDIGIT(*p))
+            for(p++; ISDIGIT(*p); p++);
+        else 
+            return LEPT_PARSE_INVALID_VALUE;
+    }
+
+    /*  把文本中的数值存到 val->num 中 */
+    val->num = strtod(con->json, NULL);
+
+    /*  如果没有正确的数值转换，则指针位置没有发生变化 
+    if(p == con->json)
+        return LEPT_PARSE_INVALID_VALUE; */
+    
+
+    /*  如果结果的幅度太大以致于无法表示，则使用 errno.h 的宏： errno == ERANGE
+        仅使用 errno == ERANGE 判断有可能误判
+        如果这个值真的很大，则会返回 math.h 的宏 HUGE_VAL 或 -HUGE_VAL
+        如果结果的幅度太小，则会返回零值，但 error 可能为 ERANGE，也有可能不为 ERANGE */
+    if(errno == ERANGE && (HUGE_VAL == val->num || -HUGE_VAL == val->num))
+        return LEPT_PARSE_NUMBER_TOO_BIG;
+        
+    con->json = p;
     val->type = LEPT_NUMBER;
     return LEPT_PARSE_OK;
 
@@ -112,14 +173,14 @@ int lept_parse_value(lept_context* con, lept_value* val)
 {
     switch (*con->json) 
     {
+        case '\0': 
+            return LEPT_PARSE_EXPECT_VALUE;
         case 'n':
             return lept_parse_literal(con, val, "null", LEPT_NULL);
         case 't':
             return lept_parse_literal(con, val, "true", LEPT_TRUE);
         case 'f':
             return lept_parse_literal(con, val, "false", LEPT_FALSE);
-        case '\0': 
-            return LEPT_PARSE_EXPECT_VALUE;
         default:   
             return lept_parse_number(con, val);
             /*  return LEPT_PARSE_INVALID_VALUE; */

@@ -36,7 +36,8 @@ enum {
     LEPT_PARSE_OK = 0, 
     LEPT_PARSE_EXPECT_VALUE, 
     LEPT_PARSE_INVALID_VALUE, 
-    LEPT_PARSE_ROOT_NOT_SINGULAR   
+    LEPT_PARSE_ROOT_NOT_SINGULAR,
+    LEPT_PARSE_NUMBER_TOO_BIG   /*  数值过大 */
 };
 
 /*  访问结果的函数，获取 JSON 的数据类型 */

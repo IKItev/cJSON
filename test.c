@@ -71,7 +71,7 @@ static void test_parse_number();
 static void test_parse_expect_value();
 static void test_parse_invalid_value();
 static void test_parse_root_not_singular();
-
+static void test_parse_number_too_big();
 
 int main(int argc, char **argv)
 {
@@ -91,6 +91,7 @@ void test_parse()
     test_parse_expect_value();
     test_parse_invalid_value();
     test_parse_root_not_singular();
+    test_parse_number_too_big();
 }
 
 
@@ -102,6 +103,7 @@ void test_parse_null()
     EXPECT_EQ_INT(LEPT_NULL, lept_get_type(&val));
 }
 
+
 void test_parse_true()
 {
     lept_value val;
@@ -110,6 +112,7 @@ void test_parse_true()
     EXPECT_EQ_INT(LEPT_TRUE, lept_get_type(&val));
 }
 
+
 void test_parse_false()
 {
     lept_value val;
@@ -117,6 +120,7 @@ void test_parse_false()
     EXPECT_EQ_INT(LEPT_PARSE_OK, lept_parse(&val, "false"));
     EXPECT_EQ_INT(LEPT_FALSE, lept_get_type(&val));
 }
+
 
 void test_parse_number() 
 {
@@ -139,6 +143,16 @@ void test_parse_number()
     TEST_NUMBER(1.234E+10, "1.234E+10");
     TEST_NUMBER(1.234E-10, "1.234E-10");
     TEST_NUMBER(0.0, "1e-10000"); /* must underflow */
+
+    TEST_NUMBER(1.0000000000000002, "1.0000000000000002"); /* the smallest number > 1 */
+    TEST_NUMBER( 4.9406564584124654e-324, "4.9406564584124654e-324"); /* minimum denormal */
+    TEST_NUMBER(-4.9406564584124654e-324, "-4.9406564584124654e-324");
+    TEST_NUMBER( 2.2250738585072009e-308, "2.2250738585072009e-308");  /* Max subnormal double */
+    TEST_NUMBER(-2.2250738585072009e-308, "-2.2250738585072009e-308");
+    TEST_NUMBER( 2.2250738585072014e-308, "2.2250738585072014e-308");  /* Min normal positive double */
+    TEST_NUMBER(-2.2250738585072014e-308, "-2.2250738585072014e-308");
+    TEST_NUMBER( 1.7976931348623157e+308, "1.7976931348623157e+308");  /* Max double */
+    TEST_NUMBER(-1.7976931348623157e+308, "-1.7976931348623157e+308");
 }
 
 
@@ -149,27 +163,41 @@ void test_parse_expect_value()
     TEST_ERROR(LEPT_PARSE_EXPECT_VALUE, " ");
 }
 
+
 /*  值不是那三种字面值 */
 void test_parse_invalid_value()
 {
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "nul");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "?");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "+");
-#if 0
+
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "+0");
-    TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "0124");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "+1");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, ".123"); /* at least one digit before '.' */
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "1.");   /* at least one digit after '.' */
+      
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "INF");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "inf");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "NAN");
     TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "nan");
-#endif
+
 }
+
 
 /*  一个值之后，在空白之后还有其他字符 */
 void test_parse_root_not_singular()
 {
     TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "null x");
+    TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "0123"); /* after zero should be '.' or nothing */
+    TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "0x0");
+    TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "0x123");
+    TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "0e123");  
+}
+
+
+/*  数值过大 */
+void test_parse_number_too_big() 
+{
+    TEST_ERROR(LEPT_PARSE_NUMBER_TOO_BIG, "1e309");
+    TEST_ERROR(LEPT_PARSE_NUMBER_TOO_BIG, "-1e309");
 }

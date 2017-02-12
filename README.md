@@ -7,5 +7,5 @@ a cjson lib exersice
     part 1:
         prase null and boolean
     part 2:
-        prase number, but invalid aprt has not modified
+        prase number, add numerical verification 
 
