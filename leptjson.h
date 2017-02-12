@@ -11,7 +11,7 @@
     我们为此声明一个枚举类型（enumeration type）  
     枚举值通常用全大写   */
 typedef enum LEPT_TYPE {
-    LEPT_NULL, 
+    LEPT_NULL = 0, 
     LEPT_FALSE, 
     LEPT_TRUE, 
     LEPT_NUMBER, 
@@ -25,6 +25,7 @@ typedef enum LEPT_TYPE {
     每个节点使用 lept_value 结构体表示，我们会称它为一个 JSON 值（JSON value） */
 typedef struct LEPT_VALUE {
     lept_type type;
+    double num; /*  由于没有限制数字的范围和精度，因此使用 double 来存储 JSON 数字较好 */
 } lept_value;
 
 /*  无错误会返回 LEPT_PARSE_OK
@@ -38,6 +39,12 @@ enum {
     LEPT_PARSE_ROOT_NOT_SINGULAR   
 };
 
+/*  访问结果的函数，获取 JSON 的数据类型 */
+lept_type lept_get_type(const lept_value* val);
+
+/*  传入 JSON 值的类型，保证类型为 LEPT_NUMBER，才能获取数值 */
+double lept_get_number(const lept_value* val);
+
 /*  解析 JSON 的函数，传入只读文本 json 和 JSON 值的指针
     一般用法是：
     lept_value v;
@@ -45,9 +52,6 @@ enum {
     int ret = lept_parse(&v, json); */
 int lept_parse(lept_value* val, const char* json);
 
-
-/*  访问结果的函数，获取 JSON 的数据类型   */
-lept_type lept_get_type(const lept_value* val);
 
  #endif /* LEPTJSON_H__ */
 
