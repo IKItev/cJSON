@@ -90,6 +90,10 @@ static void test_parse_invalid_value();
 static void test_parse_root_not_singular();
 static void test_parse_number_too_big();
 
+static void test_parse_missing_quotation_mark(); 
+static void test_parse_invalid_string_escape(); 
+static void test_parse_invalid_string_char() ;
+
 static void test_access_null();
 static void test_access_boolean();
 static void test_access_number();
@@ -116,6 +120,10 @@ void test_parse()
     test_parse_invalid_value();
     test_parse_root_not_singular();
     test_parse_number_too_big();
+
+    test_parse_missing_quotation_mark();
+    test_parse_invalid_string_escape();
+    test_parse_invalid_string_char();
 
     test_access_null();
     test_access_boolean();
@@ -194,6 +202,8 @@ void test_parse_number()
 void test_parse_string() 
 {
     TEST_STRING("", "\"\"");
+    TEST_STRING("/", "\"\\/\"");
+    TEST_STRING("/", "\"/\"");
     TEST_STRING("Hello", "\"Hello\"");
     TEST_STRING("Hello\nWorld", "\"Hello\\nWorld\"");
     TEST_STRING("\" \\ / \b \f \n \r \t", "\"\\\" \\\\ \\/ \\b \\f \\n \\r \\t\"");
@@ -249,6 +259,26 @@ void test_parse_number_too_big()
     
 }
 
+void test_parse_missing_quotation_mark() 
+{
+    TEST_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK, "\"");
+    TEST_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK, "\"abc");
+}
+
+void test_parse_invalid_string_escape() 
+{
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, "\"\\v\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, "\"\\'\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, "\"\\0\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, "\"\\x12\"");
+}
+
+void test_parse_invalid_string_char() 
+{
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_CHAR, "\"\x01\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_STRING_CHAR, "\"\x1F\"");
+}
+
 
 /*  测试写入部分 */
 
@@ -270,6 +300,7 @@ void test_access_boolean()
     EXPECT_EQ_INT(LEPT_TRUE, lept_get_type(&val));
     lept_set_boolean(&val, 0);
     EXPECT_EQ_INT(LEPT_FALSE, lept_get_type(&val));
+    lept_free(&val);
 }
 
 
@@ -280,6 +311,7 @@ void test_access_number()
     lept_set_number(&val, 1.234);
     EXPECT_EQ_INT(LEPT_NUMBER, lept_get_type(&val));
     EXPECT_EQ_DOUBLE(1.234, lept_get_number(&val));
+    lept_free(&val);
 }
 
 

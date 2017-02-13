@@ -244,6 +244,7 @@ int lept_parse_string(lept_context* con, lept_value* val)
         ch = *p++;
         switch(ch)
         {
+            /*  JSON 字符串第一个字符一定是 \" */
             case '\"':
                 len = con->top - head;
                 /*  弹栈，此时字符串存储在您是区域 con->stack 中 
@@ -265,10 +266,21 @@ int lept_parse_string(lept_context* con, lept_value* val)
                     case 'r':  PUTC(con, '\r'); break;
                     case 't':  PUTC(con, '\t'); break;
                     default:
+                        /*  无效转义字符部分 */
                         con->top = head;
+                        return LEPT_PARSE_INVALID_STRING_ESCAPE;
                 }
                 break;
+            case '\0':
+                con->top = head;
+                return LEPT_PARSE_MISS_QUOTATION_MARK;
             default:
+                /*  不合法字符串部分 */
+                if ((unsigned char)ch < 0x20) 
+                { 
+                        con->top = head;
+                        return LEPT_PARSE_INVALID_STRING_CHAR;
+                }
                 PUTC(con, ch); /*   每入栈一次，top 大小 +1 */
         }
         
@@ -406,9 +418,10 @@ number 是以十进制表示，它主要由 4 部分顺序组成：负号、整�
         %x72 /          ; r    carriage return U+000D
         %x74 /          ; t    tab             U+0009
         %x75 4HEXDIG )  ; uXXXX                U+XXXX   16 进位的 UTF-16 编码
+字符串以 \" 开始和结束
     escape = %x5C          ; \
-字符串以 " 开始和结束
     quotation-mark = %x22  ; "
 无转义字符范围
     unescaped = %x20-21 / %x23-5B / %x5D-10FFFF
+由上可见：不合法的字符是 %x00 至 %x1F
 */
