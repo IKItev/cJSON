@@ -7,43 +7,100 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <math.h>
+#include <string.h>
 #include "leptjson.h"
 
+#ifndef LEPT_PARSE_STACK_INIT_SIZE
+#define LEPT_PARSE_STACK_INIT_SIZE 256
+#endif
+
+/*  assert() 宏 assert，如果括号内的为 true，则不做任何动作
+    如果为 false，输出标准错误 stderr */
 #define EXPECT(con, ch) \
     do {\
         assert((*con->json) == (ch)); \
         con->json++; \
-        } while(0)
+    } while(0)
 
 #define ISDIGIT(ch)         ((ch) >= '0' && (ch) <= '9')
 #define ISDIGIT1TO9(ch)     ((ch) >= '1' && (ch) <= '9')
 
+#define PUTC(con, ch) \
+    do { \
+        *(char*)lept_context_push(con, sizeof(char)) = (ch); \
+    } while(0)
 
 typedef struct LEPT_CONTEST {
     const char* json;
+    char* stack;
+    size_t size, top;   /*  size 是当前的堆栈容量，top 是栈顶的位置 */
 } lept_context;
 
+static void* lept_context_push(lept_context* con, size_t size);
+static void* lept_context_pop(lept_context* con, size_t size);
 
-int lept_parse(lept_value* val, const char* json);
+static int lept_parse_value(lept_context* con, lept_value* val);
 static void lept_parse_whitespace(lept_context* con); 
 static int lept_parse_literal(lept_context* con, lept_value* val, const char* literal, lept_type tpye);
 static int lept_parse_number(lept_context* con, lept_value* val);
-static int lept_parse_value(lept_context* con, lept_value* val);
+static int lept_parse_string(lept_context* con, lept_value* val);
 
 
-/*  获取 JSON 的数据类型 */
-lept_type lept_get_type(const lept_value* val) 
+/*  入栈，返回数据起始的指针 ret */
+void* lept_context_push(lept_context* con, size_t size) 
 {
-    assert(val != NULL);
-    return val->type;
+    void* ret;
+    assert(size > 0);
+    if (con->top + size >= con->size) 
+    {
+        if(0 == con->size)
+            con->size = LEPT_PARSE_STACK_INIT_SIZE;
+        while (con->top + size >= con->size)
+            con->size += con->size >> 1;  /* c->size * 1.5 */
+        con->stack = (char*)realloc(con->stack, con->size);
+    }
+    ret = con->stack + con->top;
+    con->top += size;
+    return ret;
 }
 
 
-/*  传入 JSON 值的类型，保证类型为 LEPT_NUMBER，才能获取数值 */
-double lept_get_number(const lept_value* val) 
+void* lept_context_pop(lept_context* con, size_t size) 
 {
-    assert((NULL != val) && (LEPT_NUMBER == val->type));
-    return val->num;
+    assert(con->top >= size);
+    return con->stack + (con->top -= size);
+}
+
+
+void lept_free(lept_value* val)
+{
+    assert(NULL != val);
+    /*  只有当 val 存储的时字符串才 frre */
+    if(LEPT_STRING == val->type)
+        free(val->u.s.str);
+    /*  free 完设为 null，可以避免 type 仍是 string 导致重复释放 */
+    lept_init(val);
+}
+
+
+int lept_parse_value(lept_context* con, lept_value* val) 
+{
+    switch (*con->json) 
+    {
+        case '\0': 
+            return LEPT_PARSE_EXPECT_VALUE;
+        case 'n':
+            return lept_parse_literal(con, val, "null", LEPT_NULL);
+        case 't':
+            return lept_parse_literal(con, val, "true", LEPT_TRUE);
+        case 'f':
+            return lept_parse_literal(con, val, "false", LEPT_FALSE);
+        case '"':
+            return lept_parse_string(con, val);
+        default:   
+            return lept_parse_number(con, val);
+            /*  return LEPT_PARSE_INVALID_VALUE; */
+    }
 }
 
 
@@ -54,7 +111,9 @@ int lept_parse(lept_value* val, const char* json)
     int ret = 0;
     assert(NULL != val);
     con.json = json;
-    val->type = LEPT_NULL;
+    con.stack = NULL;   /*  初始化栈指针 */
+    con.size = con.top = 0; /*  初始化 stack 的容量和位置 */
+    lept_init(val);
     lept_parse_whitespace(&con);
     if(LEPT_PARSE_OK == (ret = lept_parse_value(&con, val)))
     {
@@ -62,6 +121,9 @@ int lept_parse(lept_value* val, const char* json)
         if('\0' != con.json[0])
             ret = LEPT_PARSE_ROOT_NOT_SINGULAR;
     }    
+
+    assert(0 == con.top); /*  确保栈中的所有数据都被弹出 */
+    free(con.stack);
     return ret;
 }
 
@@ -146,19 +208,19 @@ int lept_parse_number(lept_context* con, lept_value* val)
             return LEPT_PARSE_INVALID_VALUE;
     }
 
-    /*  把文本中的数值存到 val->num 中 */
-    val->num = strtod(con->json, NULL);
+    /*  把文本中的数值存到 val->u.num 中 */
+    val->u.num = strtod(con->json, NULL);
 
     /*  如果没有正确的数值转换，则指针位置没有发生变化 
     if(p == con->json)
         return LEPT_PARSE_INVALID_VALUE; */
     
-
-    /*  如果结果的幅度太大以致于无法表示，则使用 errno.h 的宏： errno == ERANGE
+    /*  如果结果的幅度太大以致于无法表示，则使用 ekkrrno.h 的宏： errno == ERANGE
         仅使用 errno == ERANGE 判断有可能误判
         如果这个值真的很大，则会返回 math.h 的宏 HUGE_VAL 或 -HUGE_VAL
         如果结果的幅度太小，则会返回零值，但 error 可能为 ERANGE，也有可能不为 ERANGE */
-    if(errno == ERANGE && (HUGE_VAL == val->num || -HUGE_VAL == val->num))
+    /*  理论上只 (-)HUGE_VAL == val->u.num 验证过大过小足够 */
+    if(errno == ERANGE && (HUGE_VAL == val->u.num || -HUGE_VAL == val->u.num))
         return LEPT_PARSE_NUMBER_TOO_BIG;
         
     con->json = p;
@@ -168,24 +230,139 @@ int lept_parse_number(lept_context* con, lept_value* val)
 }
 
 
-
-int lept_parse_value(lept_context* con, lept_value* val) 
+int lept_parse_string(lept_context* con, lept_value* val)
 {
-    switch (*con->json) 
+    size_t head, len;
+    char* sta;  
+    const char* p;
+    char ch;
+    head = con->top; 
+    EXPECT(con, '\"');
+    p = con->json;
+    while(1)
     {
-        case '\0': 
-            return LEPT_PARSE_EXPECT_VALUE;
-        case 'n':
-            return lept_parse_literal(con, val, "null", LEPT_NULL);
-        case 't':
-            return lept_parse_literal(con, val, "true", LEPT_TRUE);
-        case 'f':
-            return lept_parse_literal(con, val, "false", LEPT_FALSE);
-        default:   
-            return lept_parse_number(con, val);
-            /*  return LEPT_PARSE_INVALID_VALUE; */
+        ch = *p++;
+        switch(ch)
+        {
+            case '\"':
+                len = con->top - head;
+                /*  弹栈，此时字符串存储在您是区域 con->stack 中 
+                    再讲字符转义存入 con->json 中 */
+                sta = (char*)lept_context_pop(con, len);
+                lept_set_string(val, sta, len); 
+                con->json = p;
+                val->type = LEPT_STRING;
+                return LEPT_PARSE_OK;
+            case '\\':
+                switch (*p++) 
+                {
+                    case '\"': PUTC(con, '\"'); break;
+                    case '\\': PUTC(con, '\\'); break;
+                    case '/':  PUTC(con, '/' ); break;
+                    case 'b':  PUTC(con, '\b'); break;
+                    case 'f':  PUTC(con, '\f'); break;
+                    case 'n':  PUTC(con, '\n'); break;
+                    case 'r':  PUTC(con, '\r'); break;
+                    case 't':  PUTC(con, '\t'); break;
+                    default:
+                        con->top = head;
+                }
+                break;
+            default:
+                PUTC(con, ch); /*   每入栈一次，top 大小 +1 */
+        }
+        
+            
+        
+
+
     }
+
 }
+
+
+/*  获取 JSON 的数据类型 */
+lept_type lept_get_type(const lept_value* val) 
+{
+    assert(val != NULL);
+    return val->type;
+}
+
+
+/*  boolean part */
+int lept_get_boolean(const lept_value* val)
+{
+    assert((NULL != val) && ((LEPT_TRUE == val->type) || (LEPT_FALSE == val->type)) );
+    /*  判断 LEPT_TRUE ?== val->type 返回 0(false) 还是 1(true) */
+    return (LEPT_TRUE == val->type);
+}
+
+
+void lept_set_boolean(lept_value* val, int boo)
+{
+    assert(NULL != val);
+    lept_init(val);
+    if(boo) val->type = LEPT_TRUE;
+    else val->type = LEPT_FALSE;
+}
+
+
+/*  number part */
+/*  传入 JSON 值的类型，保证类型为 LEPT_NUMBER，才能获取数值 */
+double lept_get_number(const lept_value* val) 
+{
+    assert((NULL != val) && (LEPT_NUMBER == val->type));
+    return val->u.num;
+}
+
+
+void lept_set_number(lept_value* val, double num)
+{
+    assert(NULL != val);
+    lept_init(val);
+    val->u.num = num;
+    val->type = LEPT_NUMBER;
+}
+
+
+/*  string part */
+const char* lept_get_string(const lept_value* val)
+{
+    assert((NULL != val) && (LEPT_STRING == val->type));
+    return val->u.s.str;
+}
+
+
+size_t lept_get_string_length(const lept_value* val)
+{
+    assert((NULL != val) && (LEPT_STRING == val->type));
+    return val->u.s.len;
+}
+
+
+/*  设置一个值为字符串，把 str 传入到 val->u.s.str 中 */
+void lept_set_string(lept_value* val, const char* str, size_t len)
+{
+    assert((NULL != val) && ((NULL != str) || (len == 0)) );
+    lept_free(val);
+    val->u.s.str = (char*)malloc(len + 1);
+    /*  把长度为 len 的字符串 str 复制到 val->u.s.str 中 */
+    memcpy(val->u.s.str, str, len);
+    val->u.s.len = len;
+    /*  设置最后一位为 '\0' */
+    val->u.s.str[len] = '\0';
+    val->type = LEPT_STRING;
+}
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -211,4 +388,27 @@ number 是以十进制表示，它主要由 4 部分顺序组成：负号、整�
     frac = "." 1*digit
 指数部分：由大写 E 或小写 e 开始，然后可有正负号，之后是一或多个数字（0-9）。
     exp = ("e" / "E") ["-" / "+"] 1*digit
+*/
+
+/*
+字符串
+    string = quotation-mark *char quotation-mark
+无转义字符 
+    char = unescaped /
+转义序列：转义序列有 9 种，都是以反斜线 \ 开始    
+    escape (
+        %x22 /          ; "    quotation mark  U+0022
+        %x5C /          ; \    reverse solidus U+005C
+        %x2F /          ; /    solidus         U+002F
+        %x62 /          ; b    backspace       U+0008
+        %x66 /          ; f    form feed       U+000C
+        %x6E /          ; n    line feed       U+000A
+        %x72 /          ; r    carriage return U+000D
+        %x74 /          ; t    tab             U+0009
+        %x75 4HEXDIG )  ; uXXXX                U+XXXX   16 进位的 UTF-16 编码
+    escape = %x5C          ; \
+字符串以 " 开始和结束
+    quotation-mark = %x22  ; "
+无转义字符范围
+    unescaped = %x20-21 / %x23-5B / %x5D-10FFFF
 */
