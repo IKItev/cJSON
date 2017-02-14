@@ -2,12 +2,13 @@
  *  leptjson 的实现文件（implementation file），含有内部的类型声明和函数实现。
  *  此文件会编译成库。
  */
-
+#include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <math.h>
 #include <string.h>
+#include <ctype.h>
 #include "leptjson.h"
 
 #ifndef LEPT_PARSE_STACK_INIT_SIZE
@@ -30,6 +31,13 @@
         *(char*)lept_context_push(con, sizeof(char)) = (ch); \
     } while(0)
 
+#define STRING_ERROR(ret, con, len) \
+    do { \
+        con->stack = (char*)lept_context_pop(con, len); \
+        con->top = head; \
+        return ret; \
+        } while(0)
+
 typedef struct LEPT_CONTEST {
     const char* json;
     char* stack;
@@ -44,6 +52,8 @@ static void lept_parse_whitespace(lept_context* con);
 static int lept_parse_literal(lept_context* con, lept_value* val, const char* literal, lept_type tpye);
 static int lept_parse_number(lept_context* con, lept_value* val);
 static int lept_parse_string(lept_context* con, lept_value* val);
+static char* lept_parse_hex4(const char *p, unsigned* u);
+static void lept_encode_utf8(lept_context* c, unsigned u);
 
 
 /*  入栈，返回数据起始的指针 ret */
@@ -59,6 +69,8 @@ void* lept_context_push(lept_context* con, size_t size)
             con->size += con->size >> 1;  /* c->size * 1.5 */
         con->stack = (char*)realloc(con->stack, con->size);
     }
+    /*  当前传入的字符存储在 con->stack 偏移 top 这个内存中
+        通过 PUTC 宏把字符 ch 写到这个地址 */
     ret = con->stack + con->top;
     con->top += size;
     return ret;
@@ -236,19 +248,23 @@ int lept_parse_string(lept_context* con, lept_value* val)
     char* sta;  
     const char* p;
     char ch;
+    unsigned u, u2;
     head = con->top; 
-    EXPECT(con, '\"');
+    sta = con->stack;
+    /*  EXPECT 宏执行，con.json++，已经进入了字符串当中
+        后面检测第二个 \" 或其他转义字符 */
+    EXPECT(con, '\"');  
     p = con->json;
     while(1)
     {
-        ch = *p++;
+        ch = *p++; 
+        len = con->top - head;  
         switch(ch)
         {
-            /*  JSON 字符串第一个字符一定是 \" */
             case '\"':
-                len = con->top - head;
-                /*  弹栈，此时字符串存储在您是区域 con->stack 中 
-                    再讲字符转义存入 con->json 中 */
+                /*  pop 函数使 con->stack 指回初入栈时的位置，实现弹栈
+                    同时这个位置是写入到 stack 的字符串的首地址
+                    通过后面的 lept_set_string() 将 stack 的字符串写入到 val->u.s.str 中 */
                 sta = (char*)lept_context_pop(con, len);
                 lept_set_string(val, sta, len); 
                 con->json = p;
@@ -265,32 +281,89 @@ int lept_parse_string(lept_context* con, lept_value* val)
                     case 'n':  PUTC(con, '\n'); break;
                     case 'r':  PUTC(con, '\r'); break;
                     case 't':  PUTC(con, '\t'); break;
+                    case 'u':
+                        if(!(p = lept_parse_hex4(p, &u)))
+                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, con, len);                            
+                        if((u >= 0xD800) && (u <= 0xDBFF)) 
+                        { /* surrogate pair */
+                            if (*p++ != '\\')
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                            if (*p++ != 'u')
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                            if (!(p = lept_parse_hex4(p, &u2)))
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, con, len);
+                            if (u2 < 0xDC00 || u2 > 0xDFFF)
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                            u = (((u - 0xD800) << 10) | (u2 - 0xDC00)) + 0x10000;
+                        }
+                        lept_encode_utf8(con, u);
+                        break;
                     default:
                         /*  无效转义字符部分 */
-                        con->top = head;
-                        return LEPT_PARSE_INVALID_STRING_ESCAPE;
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, con, len);
                 }
                 break;
             case '\0':
-                con->top = head;
-                return LEPT_PARSE_MISS_QUOTATION_MARK;
+                STRING_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK, con, len);
             default:
                 /*  不合法字符串部分 */
                 if ((unsigned char)ch < 0x20) 
-                { 
-                        con->top = head;
-                        return LEPT_PARSE_INVALID_STRING_CHAR;
-                }
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_CHAR, con, len);
                 PUTC(con, ch); /*   每入栈一次，top 大小 +1 */
         }
-        
-            
-        
-
 
     }
 
 }
+
+
+/*  读取字符串中的十六进制字符段并分析成数值 */
+char* lept_parse_hex4(const char *p, unsigned* u)
+{
+    /*  使用 stdlib 函数 strtol() 把字符串转换为数值 
+        long int strtol(const char *str, char **endptr, int base)
+        把参数 str 所指向的字符串根据给定的 base 转换为一个 long int 型数
+        base 为进制数 */
+    char* end;
+    /*  strtol() 会跳过开始的空白，接受 "\u 123" 这种不合法的 JSON
+        所以用 ctype.h 函数 isspace() 首先判断 \u 后面是不是空字符
+        如果是控制符，则返回 true，否则 false */
+    int iss = isspace(*p);
+    if(iss)
+        return NULL;
+    *u = (unsigned)strtol(p, &end, 16);
+    return end == p + 4 ? end : NULL;
+}
+
+
+/*  编码 unicode */
+void lept_encode_utf8(lept_context* con, unsigned u) 
+{
+    if(u <= 0x7F) 
+        PUTC(con, u & 0xFF);
+    else if(u <= 0x7FF) 
+    {
+        PUTC(con, 0xC0 | ((u >> 6) & 0xFF));
+        PUTC(con, 0x80 | ( u       & 0x3F));
+    }
+    else if(u <= 0xFFFF) 
+    {
+        PUTC(con, 0xE0 | ((u >> 12) & 0xFF));
+        PUTC(con, 0x80 | ((u >>  6) & 0x3F));
+        PUTC(con, 0x80 | ( u        & 0x3F));
+    }
+    else
+    {
+        assert(u <= 0x10FFFF);
+        PUTC(con, 0xF0 | ((u >> 18) & 0xFF));
+        PUTC(con, 0x80 | ((u >> 12) & 0x3F));
+        PUTC(con, 0x80 | ((u >>  6) & 0x3F));
+        PUTC(con, 0x80 | ( u        & 0x3F));
+    }
+}
+
+
+
 
 
 /*  获取 JSON 的数据类型 */
@@ -417,11 +490,14 @@ number 是以十进制表示，它主要由 4 部分顺序组成：负号、整�
         %x6E /          ; n    line feed       U+000A
         %x72 /          ; r    carriage return U+000D
         %x74 /          ; t    tab             U+0009
-        %x75 4HEXDIG )  ; uXXXX                U+XXXX   16 进位的 UTF-16 编码
+        %x75 4HEXDIG )  ; uXXXX                U+XXXX   16 进制的 UTF-16 编码
 字符串以 \" 开始和结束
     escape = %x5C          ; \
     quotation-mark = %x22  ; "
 无转义字符范围
-    unescaped = %x20-21 / %x23-5B / %x5D-10FFFF
-由上可见：不合法的字符是 %x00 至 %x1F
+    unescaped = %x20-21 / %x23-5B / %x5D-10FFFF 不合法的字符是 %x00 至 %x1F
+
+\uXXXX 是以 16 进制表示码点 U+0000 至 U+FFFF，我们需要：
+解析 4 位十六进制整数为码点；
+由于字符串是以 UTF-8 存储，我们要把这个码点编码成 UTF-8。
 */

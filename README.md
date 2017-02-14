@@ -10,3 +10,5 @@ a cjson lib exersice
         prase number, add numerical verification 
     part 3:
         parse string, add escape character conversion
+    part 4:
+        add utf-8 support

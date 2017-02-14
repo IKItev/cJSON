@@ -92,7 +92,9 @@ static void test_parse_number_too_big();
 
 static void test_parse_missing_quotation_mark(); 
 static void test_parse_invalid_string_escape(); 
-static void test_parse_invalid_string_char() ;
+static void test_parse_invalid_string_char();
+static void test_parse_invalid_unicode_hex();
+static void test_parse_invalid_unicode_surrogate();
 
 static void test_access_null();
 static void test_access_boolean();
@@ -124,7 +126,9 @@ void test_parse()
     test_parse_missing_quotation_mark();
     test_parse_invalid_string_escape();
     test_parse_invalid_string_char();
-
+    test_parse_invalid_unicode_hex();
+    test_parse_invalid_unicode_surrogate();
+    
     test_access_null();
     test_access_boolean();
     test_access_number();
@@ -279,6 +283,33 @@ void test_parse_invalid_string_char()
     TEST_ERROR(LEPT_PARSE_INVALID_STRING_CHAR, "\"\x1F\"");
 }
 
+
+void test_parse_invalid_unicode_hex() 
+{
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u0\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u01\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u012\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u/000\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\uG000\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u0/00\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u0G00\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u0/00\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u00G0\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u000/\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u000G\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, "\"\\u 123\"");
+}
+
+
+void test_parse_invalid_unicode_surrogate() 
+{
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uDBFF\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\\\\\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\\uDBFF\"");
+    TEST_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\\uE000\"");
+}
 
 /*  测试写入部分 */
 
