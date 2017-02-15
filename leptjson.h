@@ -25,7 +25,9 @@ typedef enum LEPT_TYPE {
 /*  声明 JSON 的数据结构
     JSON 是一个树形结构，我们最终需要实现一个树的数据结构
     每个节点使用 lept_value 结构体表示，称为一个 JSON 值（JSON value) */
-typedef struct LEPT_VALUE {
+/*  由于这个结构体中使用了这个结构体，因此首先对它进行前向声明 */
+typedef struct lept_value lept_value;
+struct lept_value {
     lept_type type;
     /*  一个值只能是数值或只能是字符串，所以用 union 节省内存 */
     union {
@@ -34,8 +36,12 @@ typedef struct LEPT_VALUE {
             char* str;
             size_t len; /*  记录字符串的长度 */
         } s;
+        struct {
+            lept_value* e;   /*  数组是复合类型，记录数组中元素的类型 */
+            size_t size;
+        } a;
     } u;   
-} lept_value;
+};
 
 /*  无错误会返回 LEPT_PARSE_OK
     一个 JSON 只含有空白，返回 LEPT_PARSE_EXPECT_VALUE
@@ -51,7 +57,8 @@ enum {
     LEPT_PARSE_INVALID_STRING_ESCAPE,
     LEPT_PARSE_INVALID_STRING_CHAR,
     LEPT_PARSE_INVALID_UNICODE_HEX,
-    LEPT_PARSE_INVALID_UNICODE_SURROGATE
+    LEPT_PARSE_INVALID_UNICODE_SURROGATE,
+    LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
 
 };
 
@@ -88,6 +95,8 @@ const char* lept_get_string(const lept_value* val);
 size_t lept_get_string_length(const lept_value* val);
 void lept_set_string(lept_value* val, const char* str, size_t len);
 
+lept_value* lept_get_array_element(const lept_value* val, size_t index);
+size_t lept_get_array_size(const lept_value* val);
 
  #endif /* LEPTJSON_H__ */
 

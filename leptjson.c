@@ -54,7 +54,7 @@ static int lept_parse_number(lept_context* con, lept_value* val);
 static int lept_parse_string(lept_context* con, lept_value* val);
 static char* lept_parse_hex4(const char *p, unsigned* u);
 static void lept_encode_utf8(lept_context* c, unsigned u);
-
+static int lept_parse_array(lept_context* con, lept_value* val);
 
 /*  入栈，返回数据起始的指针 ret */
 void* lept_context_push(lept_context* con, size_t size) 
@@ -86,11 +86,18 @@ void* lept_context_pop(lept_context* con, size_t size)
 
 void lept_free(lept_value* val)
 {
+    int i = 0;
     assert(NULL != val);
     /*  只有当 val 存储的时字符串才 frre */
     if(LEPT_STRING == val->type)
         free(val->u.s.str);
     /*  free 完设为 null，可以避免 type 仍是 string 导致重复释放 */
+    if(LEPT_ARRAY == val->type)
+    {
+        for (i = 0; i < val->u.a.size; i++)
+            lept_free(&val->u.a.e[i]);
+        free(val->u.a.e);
+    }
     lept_init(val);
 }
 
@@ -109,6 +116,8 @@ int lept_parse_value(lept_context* con, lept_value* val)
             return lept_parse_literal(con, val, "false", LEPT_FALSE);
         case '"':
             return lept_parse_string(con, val);
+        case '[':
+            return lept_parse_array(con, val);
         default:   
             return lept_parse_number(con, val);
             /*  return LEPT_PARSE_INVALID_VALUE; */
@@ -131,7 +140,10 @@ int lept_parse(lept_value* val, const char* json)
     {
         lept_parse_whitespace(&con);
         if('\0' != con.json[0])
+        {
+            val->type = LEPT_NULL;
             ret = LEPT_PARSE_ROOT_NOT_SINGULAR;
+        }          
     }    
 
     assert(0 == con.top); /*  确保栈中的所有数据都被弹出 */
@@ -187,12 +199,7 @@ int lept_parse_number(lept_context* con, lept_value* val)
     if('-' == *p) p++;
     /*  整数部分 int = "0" / digit1-9 *digit */
     /*  0 开头只能有且只有 0 */
-    if('0' == *p) 
-    {
-        p++;
-        if(*p && '.' != *p)
-            return LEPT_PARSE_ROOT_NOT_SINGULAR;          
-    }
+    if('0' == *p) p++;
     else    /*  1-9 开头 */
     {   
         if(ISDIGIT1TO9(*p))
@@ -363,6 +370,76 @@ void lept_encode_utf8(lept_context* con, unsigned u)
 }
 
 
+/*  解析数组 */
+int lept_parse_array(lept_context* con, lept_value* val)
+{
+
+    size_t size = 0;
+    int i = 0;
+    int ret = 0;
+    EXPECT(con, '[');
+    lept_parse_whitespace(con);    
+    while(1)
+    {
+        lept_value e;
+        lept_init(&e);
+
+        if(']' == *con->json)
+        {
+            con->json++;
+            val->type = LEPT_ARRAY;
+            val->u.a.size = size;
+            /*  数组中没有元素 */
+            if(0 == size)
+                val->u.a.e = NULL;
+            /*  有元素 */
+            else 
+            {
+                size *= sizeof(lept_value);
+                memcpy(val->u.a.e = (lept_value*)malloc(size), lept_context_pop(con, size), size);
+            }
+            return LEPT_PARSE_OK;
+        }
+
+        /*  调用了 lept_parse_value，进行数组当中的其他元素的解析 */
+        if(LEPT_PARSE_OK != (ret = lept_parse_value(con, &e)) )
+        {
+            printf("79\n");
+            break;
+        }
+            
+        /*  入栈申请内存 
+            根据这个元素的类型申请不同长度的内存 
+            然后使用 memcpy 把这个元素复制到这段内存中，完成入栈 */
+        memcpy(lept_context_push(con, sizeof(lept_value)), &e, sizeof(lept_value));
+        size++;
+        lept_parse_whitespace(con);
+        if((',' != *con->json) && (']' != *con->json))
+        {
+            ret = LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
+            printf("35\n");
+            break;
+        }
+
+        if(',' == *con->json)
+        {
+            con->json++;            
+            lept_parse_whitespace(con);
+        }
+        
+    }
+
+    for (i = 0; i < size; i++)
+    {
+        lept_free((lept_value*)lept_context_pop(con, sizeof(lept_value)));
+        printf("%d\n", i);
+    }
+
+    return ret;
+}
+
+
+
 
 
 
@@ -440,7 +517,22 @@ void lept_set_string(lept_value* val, const char* str, size_t len)
 }
 
 
+/*  array part */
+/*  获取数组中第 index 个元素 */
+lept_value* lept_get_array_element(const lept_value* val, size_t index)
+{
+    assert((NULL != val) && (LEPT_ARRAY == val->type));
+    assert(index < val->u.a.size);
+    return &val->u.a.e[index];
+}
 
+
+/*  获取数组中元素的长度 */
+size_t lept_get_array_size(const lept_value* val)
+{
+    assert((NULL != val) && (LEPT_ARRAY == val->type));
+    return val->u.a.size;
+}
 
 
 
@@ -500,4 +592,15 @@ number 是以十进制表示，它主要由 4 部分顺序组成：负号、整�
 \uXXXX 是以 16 进制表示码点 U+0000 至 U+FFFF，我们需要：
 解析 4 位十六进制整数为码点；
 由于字符串是以 UTF-8 存储，我们要把这个码点编码成 UTF-8。
+*/
+
+/*
+一个 JSON 数组可以包含零至多个元素，而这些元素也可以是数组类型
+    array = %x5B ws [ value *( ws %x2C ws value ) ] ws %x5D
+        %x5B 是左中括号 [
+        %x2C 是逗号 ,
+        %x5D 是右中括号 ]
+        ws 是空白字符
+一个数组可以包含零至多个值，但不接受末端额外的逗号，例如 [1,2,]
+
 */

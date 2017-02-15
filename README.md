@@ -12,3 +12,5 @@ a cjson lib exersice
         parse string, add escape character conversion
     part 4:
         add utf-8 support
+    part 5:
+        add array, fix a number-part bug about space after "0"
