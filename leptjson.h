@@ -27,6 +27,7 @@ typedef enum LEPT_TYPE {
     每个节点使用 lept_value 结构体表示，称为一个 JSON 值（JSON value) */
 /*  由于这个结构体中使用了这个结构体，因此首先对它进行前向声明 */
 typedef struct lept_value lept_value;
+typedef struct lept_member lept_member;
 struct lept_value {
     lept_type type;
     /*  一个值只能是数值或只能是字符串，所以用 union 节省内存 */
@@ -40,7 +41,17 @@ struct lept_value {
             lept_value* e;   /*  数组是复合类型，记录数组中元素的类型 */
             size_t size;
         } a;
+        struct {
+            lept_member* m;
+            size_t size;
+        } o;
     } u;   
+};
+/*  Object 成员结构体 */
+struct lept_member {
+    char *k;
+    size_t klen;
+    lept_value val;
 };
 
 /*  无错误会返回 LEPT_PARSE_OK
@@ -58,7 +69,10 @@ enum {
     LEPT_PARSE_INVALID_STRING_CHAR,
     LEPT_PARSE_INVALID_UNICODE_HEX,
     LEPT_PARSE_INVALID_UNICODE_SURROGATE,
-    LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
+    LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET,
+    LEPT_PARSE_MISS_KEY,
+    LEPT_PARSE_MISS_COLON,
+    LEPT_PARSE_MISS_COMMA_OR_CURLY_BRACKET
 
 };
 
@@ -97,6 +111,12 @@ void lept_set_string(lept_value* val, const char* str, size_t len);
 
 lept_value* lept_get_array_element(const lept_value* val, size_t index);
 size_t lept_get_array_size(const lept_value* val);
+
+lept_value* lept_get_object_value(const lept_value* val, size_t index);
+const char* lept_get_object_key(const lept_value* val, size_t index);
+size_t lept_get_object_key_length(const lept_value* val, size_t index);
+size_t lept_get_object_size(const lept_value* val);
+
 
  #endif /* LEPTJSON_H__ */
 

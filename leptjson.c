@@ -31,9 +31,8 @@
         *(char*)lept_context_push(con, sizeof(char)) = (ch); \
     } while(0)
 
-#define STRING_ERROR(ret, con, len) \
+#define STRING_ERROR(ret) \
     do { \
-        con->stack = (char*)lept_context_pop(con, len); \
         con->top = head; \
         return ret; \
         } while(0)
@@ -51,10 +50,17 @@ static int lept_parse_value(lept_context* con, lept_value* val);
 static void lept_parse_whitespace(lept_context* con); 
 static int lept_parse_literal(lept_context* con, lept_value* val, const char* literal, lept_type tpye);
 static int lept_parse_number(lept_context* con, lept_value* val);
+static int lept_parse_string_raw(lept_context* con, char** str, size_t* len);
 static int lept_parse_string(lept_context* con, lept_value* val);
+
+
 static char* lept_parse_hex4(const char *p, unsigned* u);
 static void lept_encode_utf8(lept_context* c, unsigned u);
 static int lept_parse_array(lept_context* con, lept_value* val);
+static int lept_parse_object(lept_context* con, lept_value* val);
+
+
+
 
 /*  入栈，返回数据起始的指针 ret */
 void* lept_context_push(lept_context* con, size_t size) 
@@ -98,6 +104,14 @@ void lept_free(lept_value* val)
             lept_free(&val->u.a.e[i]);
         free(val->u.a.e);
     }
+    if(LEPT_OBJECT == val->type)
+    {
+        for (i = 0; i < val->u.o.size; i++) {
+                free(val->u.o.m[i].k);
+                lept_free(&val->u.o.m[i].val);
+            }
+            free(val->u.o.m);
+    }
     lept_init(val);
 }
 
@@ -118,6 +132,8 @@ int lept_parse_value(lept_context* con, lept_value* val)
             return lept_parse_string(con, val);
         case '[':
             return lept_parse_array(con, val);
+        case '{':
+            return lept_parse_object(con, val);
         default:   
             return lept_parse_number(con, val);
             /*  return LEPT_PARSE_INVALID_VALUE; */
@@ -249,33 +265,29 @@ int lept_parse_number(lept_context* con, lept_value* val)
 }
 
 
-int lept_parse_string(lept_context* con, lept_value* val)
+/* 解析 JSON 字符串，把结果写入 str 和 len */
+/* str 指向 c->stack 中的元素，需要在 c->stack  */
+int lept_parse_string_raw(lept_context* con, char** str, size_t* len) 
 {
-    size_t head, len;
-    char* sta;  
+    size_t head;
     const char* p;
     char ch;
     unsigned u, u2;
-    head = con->top; 
-    sta = con->stack;
-    /*  EXPECT 宏执行，con.json++，已经进入了字符串当中
-        后面检测第二个 \" 或其他转义字符 */
-    EXPECT(con, '\"');  
+    head = con->top;
+    EXPECT(con, '\"');
     p = con->json;
     while(1)
     {
         ch = *p++; 
-        len = con->top - head;  
+        *len = con->top - head; 
         switch(ch)
         {
             case '\"':
                 /*  pop 函数使 con->stack 指回初入栈时的位置，实现弹栈
                     同时这个位置是写入到 stack 的字符串的首地址
                     通过后面的 lept_set_string() 将 stack 的字符串写入到 val->u.s.str 中 */
-                sta = (char*)lept_context_pop(con, len);
-                lept_set_string(val, sta, len); 
+                *str = (char*)lept_context_pop(con, *len);
                 con->json = p;
-                val->type = LEPT_STRING;
                 return LEPT_PARSE_OK;
             case '\\':
                 switch (*p++) 
@@ -290,37 +302,47 @@ int lept_parse_string(lept_context* con, lept_value* val)
                     case 't':  PUTC(con, '\t'); break;
                     case 'u':
                         if(!(p = lept_parse_hex4(p, &u)))
-                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, con, len);                            
+                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);                            
                         if((u >= 0xD800) && (u <= 0xDBFF)) 
                         { /* surrogate pair */
                             if (*p++ != '\\')
-                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
                             if (*p++ != 'u')
-                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
                             if (!(p = lept_parse_hex4(p, &u2)))
-                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX, con, len);
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
                             if (u2 < 0xDC00 || u2 > 0xDFFF)
-                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE, con, len);
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
                             u = (((u - 0xD800) << 10) | (u2 - 0xDC00)) + 0x10000;
                         }
                         lept_encode_utf8(con, u);
                         break;
                     default:
                         /*  无效转义字符部分 */
-                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE, con, len);
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE);
                 }
                 break;
             case '\0':
-                STRING_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK, con, len);
+                STRING_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK);
             default:
                 /*  不合法字符串部分 */
                 if ((unsigned char)ch < 0x20) 
-                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_CHAR, con, len);
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_CHAR);
                 PUTC(con, ch); /*   每入栈一次，top 大小 +1 */
         }
-
     }
 
+}
+
+
+int lept_parse_string(lept_context* con, lept_value* val) 
+{
+    int ret;
+    char* sta;
+    size_t len;
+    if ((ret = lept_parse_string_raw(con, &sta, &len)) == LEPT_PARSE_OK)
+        lept_set_string(val, sta, len);
+    return ret;
 }
 
 
@@ -403,10 +425,7 @@ int lept_parse_array(lept_context* con, lept_value* val)
 
         /*  调用了 lept_parse_value，进行数组当中的其他元素的解析 */
         if(LEPT_PARSE_OK != (ret = lept_parse_value(con, &e)) )
-        {
-            printf("79\n");
             break;
-        }
             
         /*  入栈申请内存 
             根据这个元素的类型申请不同长度的内存 
@@ -417,7 +436,91 @@ int lept_parse_array(lept_context* con, lept_value* val)
         if((',' != *con->json) && (']' != *con->json))
         {
             ret = LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
-            printf("35\n");
+            break;
+        }
+
+        if(',' == *con->json)
+        {
+            con->json++;            
+            lept_parse_whitespace(con);
+        }        
+    }
+
+    for (i = 0; i < size; i++)
+        lept_free((lept_value*)lept_context_pop(con, sizeof(lept_value)));
+
+    return ret;
+}
+
+
+/*  解析对象 */
+int lept_parse_object(lept_context* con, lept_value* val)
+{
+    size_t size = 0;
+    int i = 0;
+    int ret = 0;
+    lept_member m;
+    m.k = NULL;
+    EXPECT(con, '{');
+    lept_parse_whitespace(con);    
+    while(1)
+    {
+        char* str;
+        lept_init(&m.val);
+
+        if('}' == *con->json)
+        {
+            con->json++;
+            val->type = LEPT_OBJECT;
+            val->u.o.size = size;
+            /*  数组中没有元素 */
+            if(0 == size)
+                val->u.o.m = NULL;
+            /*  有元素 */
+            else 
+            {
+                size *= sizeof(lept_member);
+                memcpy(val->u.o.m = (lept_member*)malloc(size), lept_context_pop(con, size), size);
+            }
+            return LEPT_PARSE_OK;
+        }
+
+        /*  解析 object，object 是用引号扩着的一串字符串
+            把解析的字符串存到 str 指针指向的区域 */
+        if('"' != *con->json)
+        {
+            ret = LEPT_PARSE_MISS_KEY;
+            break;
+        }
+        if(LEPT_PARSE_OK != (ret = lept_parse_string_raw(con, &str, &m.klen)) )
+            break;
+        /*  复制到 m.k 中，最后放一个 '\0' 表示字符串结束 */
+        memcpy(m.k = (char*)malloc(m.klen + 1), str, m.klen);
+        m.k[m.klen] = '\0'; 
+        lept_parse_whitespace(con);
+
+        /*  object 后面必须接着冒号 */
+        if(':' != *con->json)
+        {
+            ret = LEPT_PARSE_MISS_COLON;
+            break;
+        }    
+        con->json++;
+        lept_parse_whitespace(con);
+
+        /*  解析里面的元素 */
+        if(LEPT_PARSE_OK != (ret = lept_parse_value(con, &m.val)) )
+            break;
+        /*  入栈申请内存 
+            根据这个元素的类型申请不同长度的内存 
+            然后使用 memcpy 把这个元素复制到这段内存中，完成入栈 */
+        memcpy(lept_context_push(con, sizeof(lept_member)), &m, sizeof(lept_member));
+        size++;
+        m.k = NULL;
+        lept_parse_whitespace(con);
+        if((',' != *con->json) && ('}' != *con->json))
+        {
+            ret = LEPT_PARSE_MISS_COMMA_OR_CURLY_BRACKET;
             break;
         }
 
@@ -428,18 +531,12 @@ int lept_parse_array(lept_context* con, lept_value* val)
         }
         
     }
-
+    free(m.k);
     for (i = 0; i < size; i++)
-    {
         lept_free((lept_value*)lept_context_pop(con, sizeof(lept_value)));
-        printf("%d\n", i);
-    }
 
     return ret;
 }
-
-
-
 
 
 
@@ -535,7 +632,37 @@ size_t lept_get_array_size(const lept_value* val)
 }
 
 
+/*  object part */
+/*  获取第 index 个 member 的值 */
+lept_value* lept_get_object_value(const lept_value* val, size_t index)
+{
+    assert((NULL != val) && (LEPT_OBJECT == val->type));
+    assert(index < val->u.o.size);
+    return &val->u.o.m[index].val;
+}
 
+/*  得到第 index 个 member 的标题 */
+const char* lept_get_object_key(const lept_value* val, size_t index)
+{
+    assert((NULL != val) && (LEPT_OBJECT == val->type));
+    assert(index < val->u.o.size);
+    return val->u.o.m[index].k;
+}
+
+/*  返回第 index 个 member 的长度 */
+size_t lept_get_object_key_length(const lept_value* val, size_t index)
+{
+    assert((NULL != val) && (LEPT_OBJECT == val->type));
+    assert(index < val->u.o.size);
+    return val->u.o.m[index].klen;
+}
+
+/*  返回 object 的整体长度 */
+size_t lept_get_object_size(const lept_value* val)
+{
+    assert((NULL != val) && (LEPT_OBJECT == val->type));
+    return val->u.a.size;
+}
 
 
 
@@ -602,5 +729,13 @@ number 是以十进制表示，它主要由 4 部分顺序组成：负号、整�
         %x5D 是右中括号 ]
         ws 是空白字符
 一个数组可以包含零至多个值，但不接受末端额外的逗号，例如 [1,2,]
+
+*/
+
+/*
+JSON 对象由对象成员（member）组成。
+所谓对象成员，就是键值对，键必须为 JSON 字符串，然后值是任何 JSON 值，中间以冒号 :（U+003A）分隔。
+member = string ws %x3A ws value
+object = %x7B ws [ member *( ws %x2C ws member ) ] ws %x7D
 
 */
