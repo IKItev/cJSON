@@ -14,3 +14,5 @@ a cjson lib exersice
         add utf-8 support
     part 5:
         add array, fix a number-part bug about space after "0"
+    part 6:
+        add object
