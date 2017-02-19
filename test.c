@@ -13,21 +13,21 @@
     如果预期值不等于实际值，则输出错误信息
     else test_pass++ */
 #define EXPECT_EQ_BASE(equality, expect, actual, format) \
-    do {\
-        test_count++;\
-        if (equality)\
-            test_pass++;\
-        else {\
-            fprintf(stderr, "%s:%d: expect: " format " actual: " format "\n", __FILE__, __LINE__, expect, actual);\
-            main_ret = 1;\
-        }\
+    do { \
+        test_count++; \
+        if (equality) \
+            test_pass++; \
+        else { \
+            fprintf(stderr, "%s:%d: expect: " format " actual: " format "\n", __FILE__, __LINE__, expect, actual); \
+            main_ret = 1; \
+        } \
     } while(0)
 
 #define EXPECT_EQ_INT(expect, actual) \
     EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%d")
 
 #define EXPECT_EQ_DOUBLE(expect, actual) \
-    EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%g")
+    EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%.17g")
     /*  f	以小数形式输出单、双精度实数
         e,E	以指数形式输出单、双精度实数
         g,G	以 %f 或 %e 中较短的输出宽度输出单、双精度实数 */
@@ -36,11 +36,8 @@
     EXPECT_EQ_BASE(sizeof(expect) - 1 == alength && memcmp(expect, actual, alength) == 0, expect, actual, "%s")
 
 /*  数组的大小应该使用 size_t */
-#if defined(_MSC_VER)
-#define EXPECT_EQ_SIZE_T(expect, actual) EXPECT_EQ_BASE((expect) == (actual), (size_t)expect, (size_t)actual, "%Iu")
-#else
+
 #define EXPECT_EQ_SIZE_T(expect, actual) EXPECT_EQ_BASE((expect) == (actual), (size_t)expect, (size_t)actual, "%zu")
-#endif
 
 
 
@@ -79,6 +76,20 @@
     } while(0)
 
 
+/*  生成器测试，往返（roundtrip）测试 */
+#define TEST_ROUNDTRIP(json) \
+    do { \
+        lept_value val; \
+        char* json2; \
+        size_t length; \
+        lept_init(&val); \
+        EXPECT_EQ_INT(LEPT_PARSE_OK, lept_parse(&val, json)); \
+        json2 = lept_stringify(&val, &length); \
+        EXPECT_EQ_STRING(json, json2, length); \
+        lept_free(&val);\
+        free(json2);\
+    } while(0)
+
 
 /*  仅对集中无效部分的代码进行宏定义替换重构
     由于有小部分的测试将来要有所添加
@@ -106,6 +117,9 @@ static void test_parse_number();
 static void test_parse_string();
 static void test_parse_array();
 static void test_parse_object();
+
+static void test_stringify();
+
 static void test_parse_expect_value();
 static void test_parse_invalid_value();
 static void test_parse_root_not_singular();
@@ -143,6 +157,8 @@ void test_parse()
     test_parse_string();
     test_parse_array();
     test_parse_object();
+
+    test_stringify();    
 
     test_parse_expect_value();
     test_parse_invalid_value();
@@ -345,6 +361,56 @@ void test_parse_object()
 
     lept_free(&val);
 }
+
+
+void test_stringify() 
+{
+    TEST_ROUNDTRIP("null");
+    TEST_ROUNDTRIP("false");
+    TEST_ROUNDTRIP("true");
+
+    /*  test roundtrip number */
+    TEST_ROUNDTRIP("0");
+    TEST_ROUNDTRIP("-0");
+    TEST_ROUNDTRIP("1");
+    TEST_ROUNDTRIP("-1");
+    TEST_ROUNDTRIP("1.5");
+    TEST_ROUNDTRIP("-1.5");
+    TEST_ROUNDTRIP("3.25");
+    TEST_ROUNDTRIP("1e+20");
+    TEST_ROUNDTRIP("1.234e+20");
+    TEST_ROUNDTRIP("1.234e-20");
+
+    TEST_ROUNDTRIP("1.0000000000000002"); /* the smallest number > 1 */
+    TEST_ROUNDTRIP("4.9406564584124654e-324"); /* minimum denormal */
+    TEST_ROUNDTRIP("-4.9406564584124654e-324");
+    TEST_ROUNDTRIP("2.2250738585072009e-308");  /* Max subnormal double */
+    TEST_ROUNDTRIP("-2.2250738585072009e-308");
+    TEST_ROUNDTRIP("2.2250738585072014e-308");  /* Min normal positive double */
+    TEST_ROUNDTRIP("-2.2250738585072014e-308");
+    TEST_ROUNDTRIP("1.7976931348623157e+308");  /* Max double */
+    TEST_ROUNDTRIP("-1.7976931348623157e+308");
+
+    /*  test roundtrip string */
+    TEST_ROUNDTRIP("\"\"");
+    TEST_ROUNDTRIP("\"Hello\"");
+    TEST_ROUNDTRIP("\"Hello\\nWorld\"");
+    TEST_ROUNDTRIP("\"\\\" \\\\ / \\b \\f \\n \\r \\t\"");
+    TEST_ROUNDTRIP("\"Hello\\u0000World\"");
+
+    /*  test roundtrip array */
+    TEST_ROUNDTRIP("[]");
+    TEST_ROUNDTRIP("[null,false,true,123,\"abc\",[1,2,3]]");
+
+    /*  test roundtrip object */
+    TEST_ROUNDTRIP("{}");
+    TEST_ROUNDTRIP("{\"n\":null,\"f\":false,\"t\":true,\"i\":123,\"s\":\"abc\",\"a\":[1,2,3],\"o\":{\"1\":1,\"2\":2,\"3\":3}}");
+
+}
+
+
+
+
 
 /*  只含空白 */
 void test_parse_expect_value()

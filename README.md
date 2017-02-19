@@ -16,3 +16,5 @@ a cjson lib exersice
         add array, fix a number-part bug about space after "0"
     part 6:
         add object
+    part 7:
+        generator

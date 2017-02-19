@@ -33,18 +33,9 @@ struct lept_value {
     /*  一个值只能是数值或只能是字符串，所以用 union 节省内存 */
     union {
         double num; /*  由于没有限制数字的范围和精度，因此使用 double 来存储 JSON 数字较好 */
-        struct {
-            char* str;
-            size_t len; /*  记录字符串的长度 */
-        } s;
-        struct {
-            lept_value* e;   /*  数组是复合类型，记录数组中元素的类型 */
-            size_t size;
-        } a;
-        struct {
-            lept_member* m;
-            size_t size;
-        } o;
+        struct { char* str; size_t len; } s;
+        struct { lept_value* e; size_t size; } a;
+        struct { lept_member* m; size_t size; } o;
     } u;   
 };
 /*  Object 成员结构体 */
@@ -116,6 +107,10 @@ lept_value* lept_get_object_value(const lept_value* val, size_t index);
 const char* lept_get_object_key(const lept_value* val, size_t index);
 size_t lept_get_object_key_length(const lept_value* val, size_t index);
 size_t lept_get_object_size(const lept_value* val);
+
+
+char* lept_stringify(const lept_value* val, size_t* length);
+
 
 
  #endif /* LEPTJSON_H__ */

@@ -15,6 +15,10 @@
 #define LEPT_PARSE_STACK_INIT_SIZE 256
 #endif
 
+#ifndef LEPT_PARSE_STRINGIFY_INIT_SIZE
+#define LEPT_PARSE_STRINGIFY_INIT_SIZE 256
+#endif
+
 /*  assert() 宏 assert，如果括号内的为 true，则不做任何动作
     如果为 false，输出标准错误 stderr */
 #define EXPECT(con, ch) \
@@ -30,6 +34,9 @@
     do { \
         *(char*)lept_context_push(con, sizeof(char)) = (ch); \
     } while(0)
+
+#define PUTS(con, s, len) \
+     memcpy(lept_context_push(con, len), s, len)
 
 #define STRING_ERROR(ret) \
     do { \
@@ -59,7 +66,10 @@ static void lept_encode_utf8(lept_context* c, unsigned u);
 static int lept_parse_array(lept_context* con, lept_value* val);
 static int lept_parse_object(lept_context* con, lept_value* val);
 
-
+static void lept_stringify_value(lept_context*con, const lept_value* val);
+static void lept_stringify_string(lept_context* con, const char* s, size_t len);
+static void lept_stringify_array(lept_context* con, const lept_value* val);
+static void lept_stringify_object(lept_context* con, const lept_value* val);
 
 
 /*  入栈，返回数据起始的指针 ret */
@@ -665,9 +675,166 @@ size_t lept_get_object_size(const lept_value* val)
 }
 
 
+/*  生成器 */
+/*  把生成的树值写道 *json */
+char* lept_stringify(const lept_value* val, size_t* length)
+{
+    lept_context con;
+    assert(NULL != val);
+    con.size = LEPT_PARSE_STRINGIFY_INIT_SIZE;
+    con.stack = (char*)malloc(con.size);
+    con.top = 0;
+    lept_stringify_value(&con, val);
+    if(length)
+        *length = con.top;
+    /*  在生成的值后面添加空白符作为结尾 */
+    PUTC(&con, '\0');
+    return con.stack;
+}
 
 
+void lept_stringify_value(lept_context*con, const lept_value* val)
+{
+    char* buf;
+    int length;
+    switch(val->type)
+    {
+        case LEPT_NULL:
+            PUTS(con, "null", 4);
+            break;
+        case LEPT_TRUE:
+            PUTS(con, "true", 4);
+            break;
+        case LEPT_FALSE:
+            PUTS(con, "false", 5);
+            break;    
+        case LEPT_NUMBER:
+            /*  stdio.h 函数 sprintf，将 val->u.num 格式化输出到 buf (con.stack)
+                如果成功，则返回写入的字符总数 */
+            buf = lept_context_push(con, 32);
+            length = sprintf(buf, "%.17g", val->u.num);
+            con->top -= 32 - length;
+            break;         
+        case LEPT_STRING:
+            lept_stringify_string(con, val->u.s.str, val->u.s.len);
+            break;      
+        case LEPT_ARRAY:
+            lept_stringify_array(con, val);
+            break;
+        case LEPT_OBJECT:
+            lept_stringify_object(con, val);
+            break;
+        default:
+            assert(0 && "invalid type");
+            break;
+    }
+}
 
+#if 0
+/*  代替多次使用 PUTS 的版本，优化性能 */
+void lept_stringify_string(lept_context* con, const char* s, size_t len)
+{
+    size_t i = 0;
+    unsigned char ch;
+    assert(NULL != s);
+    PUTC(con, '"');
+    for(i = 0; i < len; i++)
+    {
+        ch = (unsigned char)s[i];
+        switch(ch)
+        {
+            case '\"': PUTS(con, "\\\"", 2); break;
+            case '\\': PUTS(con, "\\\\", 2); break;
+            case '\b': PUTS(con, "\\b",  2); break;
+            case '\f': PUTS(con, "\\f",  2); break;
+            case '\n': PUTS(con, "\\n",  2); break;
+            case '\r': PUTS(con, "\\r",  2); break;
+            case '\t': PUTS(con, "\\t",  2); break;
+            default:
+                if (ch < 0x20) {
+                    char buf[7];
+                    sprintf(buf, "\\u%04X", ch);
+                    PUTS(con, buf, 6);
+                }
+                else
+                    PUTC(con, s[i]);
+        }
+    }
+    PUTC(con, '"');
+}
+
+#else
+void lept_stringify_string(lept_context* con, const char* s, size_t len)
+{
+    static const char hex_digits[] = 
+        { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
+    size_t i = 0, size = 0;
+    char *p, *head;
+    unsigned char ch;
+    assert(NULL != s);
+    /*  每个字符可生成最长的形式是 \u00XX，占 6 个字符
+        再加上前后两个双引号，也就是共 len * 6 + 2 个输出字符 */
+    p = head = lept_context_push(con, size = len * 6 + 2);
+    *p++ = '"';
+    for(i = 0; i < len; i++)
+    {
+        ch = (unsigned char)s[i];
+        switch(ch)
+        {
+            case '\"': *p++ = '\\'; *p++ = '\"'; break;
+            case '\\': *p++ = '\\'; *p++ = '\\'; break;
+            case '\b': *p++ = '\\'; *p++ = 'b';  break;
+            case '\f': *p++ = '\\'; *p++ = 'f';  break;
+            case '\n': *p++ = '\\'; *p++ = 'n';  break;
+            case '\r': *p++ = '\\'; *p++ = 'r';  break;
+            case '\t': *p++ = '\\'; *p++ = 't';  break;
+            default:
+                if (ch < 0x20) {
+                    *p++ = '\\'; *p++ = 'u'; *p++ = '0'; *p++ = '0';
+                    *p++ = hex_digits[ch >> 4];
+                    *p++ = hex_digits[ch & 15];
+                }
+                else
+                    *p++ = s[i];
+        }
+    }
+    *p++ = '"';
+    con->top -= size - (p - head); 
+
+}
+#endif
+
+
+void lept_stringify_array(lept_context* con, const lept_value* val)
+{
+    size_t i = 0;
+    assert(NULL != val);
+    PUTC(con, '[');
+    for(i = 0; i < val->u.a.size; i++)
+    {
+        if(i > 0) PUTC(con, ',');
+        lept_stringify_value(con, &val->u.a.e[i]);
+    }
+    PUTC(con, ']');
+
+}
+
+
+void lept_stringify_object(lept_context* con, const lept_value* val)
+{
+    size_t i = 0;
+    assert(NULL != val);
+    PUTC(con, '{');
+    for(i = 0; i < val->u.o.size; i++)
+    {
+        if(i > 0) PUTC(con, ',');
+        lept_stringify_string(con, val->u.o.m[i].k, val->u.o.m[i].klen);
+        PUTC(con, ':');
+        lept_stringify_value(con, &val->u.o.m[i].val);
+    }
+    PUTC(con, '}');
+
+}
 
 
 /*
